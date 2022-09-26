@@ -48,7 +48,6 @@ sys     0m1.371s
 
 file size compare,
 ```
-[zl131478@node-build011164002207.na620 /home/zl131478/zlei/alibaba/arthur]
 $ls -al core.50519 acore.50519
 -rw-r--r-- 1 zl131478 users   15712205 Mar 18 20:08 acore.50519
 -rw-r--r-- 1 zl131478 users 1699545344 Mar 18 20:08 core.50519
