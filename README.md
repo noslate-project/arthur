@@ -1,20 +1,20 @@
 
-Arthur uses Fork() to reduce the pausing lag, and lz4 to reduce the corefile size.
+Arthur uses fork() to reduce the pausing lag, and lz4 to reduce the corefile size.
 
 Capture a corefile by arthur,
 
 ```
 arthur -p <pid>
 ```
-file will save in acore.pid.
+coredump will be saved to acore.pid.
 
 Acore is the new corefile format used in Arthur, 
 
-Convert acore to corefile, 
+Convert Acore to GNU corefile, 
 ```
 arthur -c <acore.pid>
 ```
-GNU corefile will save in core.pid.
+GNU corefile will be saved to core.pid.
 
 ### arthur vs gcore
 
@@ -49,8 +49,8 @@ sys     0m1.371s
 file size compare,
 ```
 $ls -al core.50519 acore.50519
--rw-r--r-- 1 zl131478 users   15712205 Mar 18 20:08 acore.50519
--rw-r--r-- 1 zl131478 users 1699545344 Mar 18 20:08 core.50519
+-rw-r--r-- 1 zlei users   15712205 Mar 18 20:08 acore.50519
+-rw-r--r-- 1 zlei users 1699545344 Mar 18 20:08 core.50519
 ```
 
 ### Advanced Usage
@@ -76,4 +76,4 @@ Monitor mode,
 arthur -p <pid> -3
 ```
 
-only support x86_64 Linux.
+only supports x86_64 Linux.
