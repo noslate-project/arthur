@@ -1,3 +1,4 @@
+### Description
 
 Arthur uses fork() to reduce the pausing lag, and lz4 to reduce the corefile size.
 
@@ -51,6 +52,21 @@ file size compare,
 $ls -al core.50519 acore.50519
 -rw-r--r-- 1 zlei users   15712205 Mar 18 20:08 acore.50519
 -rw-r--r-- 1 zlei users 1699545344 Mar 18 20:08 core.50519
+```
+
+### How to build
+
+First, you need centos 7
+
+Then, you need to install: 
+
+```
+yum install gcc-c++ gcc make -y
+```
+
+Then, run build
+```
+make
 ```
 
 ### Advanced Usage
