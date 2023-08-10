@@ -18,15 +18,37 @@
 namespace arthur {
 
 class Coredump;
-class ThreadData;
+struct ThreadData;
 
 // keeps 6 bytes for magic header
 #define ACORE_MAGIC {'A', 'R', 'T', 'H', 'U', 'R'}
 
+enum ARCHTYPE {
+    ARCH_X64 = 0,
+    ARCH_AARCH64 = 1,
+    ARCH_MAX
+};
+static_assert(ARCH_MAX < 16, "arch type too large.");
+
 // acore file header
 struct AcoreHeader {
     char magic[6] = ACORE_MAGIC;
-    uint16_t version = 1;
+
+    /* version history:
+     * 1: first u16 version.
+     * 2: support arch and introduced aarch64 arch.
+     */
+
+#define ACORE_VERSION 2
+    struct {
+        uint16_t version:12;
+        uint16_t arch:4;        // ARCHTYPE
+    } m
+#ifdef __aarch64__
+    = {ACORE_VERSION, ARCH_AARCH64};
+#else
+    = {ACORE_VERSION, ARCH_X64};
+#endif
 };
 static_assert(sizeof(AcoreHeader) == 8, "acore header oversize");
 
@@ -73,15 +95,27 @@ public:
 struct ThreadData {
     uint32_t _pid;
     uint32_t _attached:1;
-
-    elf_gregset64_t     _regs;      // Generic Registers 
-    elf_fpregset64_t    _fpregs;    // FP Registers
-    siginfo_t           _siginfo;   // SigInfo 
-#ifdef __x86_64__    
-    elf_x86xstatereg    _xstatereg; // X86_XSTATE
-#endif
-    ProcFile *_stat;
+    uint32_t _arch:4;   // ARCHTYPE
     
+    // Generic Registers 
+    union {
+        x64_user_regs64_struct      x64;
+        arm64_user_regs64_struct    arm64;
+    } _regs; 
+
+    // FP Registers
+    union {
+        x64_user_fpregs64_struct    x64;
+        arm64_user_fpsimd64_struct  arm64;
+    } _fpregs; 
+  
+    union {
+        x64_xstatereg               x64;           
+    } _xstate; 
+
+    siginfo_t _siginfo;   // SigInfo 
+    
+    ProcFile *_stat;
     ProcStat *_d_stat;
 
 public:
@@ -274,7 +308,8 @@ private:
 private:
     pid_t _pid;             // target pid
     pid_t _core_pid;        // forked core's pid
-    
+    int _arch;              // ARCHTYPE
+
     // TBD: move to acore or corefile class. 
     ProcessData _process;   // process data
     Elf64_Ehdr _ehdr;
