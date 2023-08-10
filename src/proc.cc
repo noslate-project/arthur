@@ -5,6 +5,7 @@
 #include <iostream> 
 #include <sstream> 
 #include <cstdarg>
+#include <fcntl.h>
 
 #include "inc.h"
 #include "proc.h"
@@ -18,9 +19,10 @@ const char* szProcType(ProcType type)
 #define V(a, b) case a: return b;
         PROC_TYPE_LIST(V)
 #undef V
+        default: 
+            break;
     }
 
-    assert(0);
     return NULL;
 }
 
@@ -73,7 +75,7 @@ ProcFile* ProcFile::Read(char* buf, int buf_len, const char *fmt, ...)
 
 int ProcDecoder::readline(int& cur, char *out, size_t n)
 {
-    if (!_pf || cur >= _pf->f_size) {
+    if (!_pf || cur >= (int)_pf->f_size) {
         return 0;
     }
 
@@ -116,7 +118,7 @@ int ProcMaps::Parse()
         //printf("%s\n", line);
         MemRegion r = {};
         name[0] = 0;
-        sscanf(line, "%llx-%llx %4s %8x %x:%x %u %s", 
+        sscanf(line, "%lx-%lx %4s %8lx %x:%x %lu %s", 
                 &r.start_addr, 
                 &r.end_addr,
                 perm,
@@ -223,7 +225,7 @@ int ProcStat::Parse()
 int ProcAuxv::Parse()
 {
     uint64_t *vec = (uint64_t*)_pf->f_data;
-    for (int i=0; i < (_pf->f_size / 8); i+=2) {
+    for (int i=0; i < (int)(_pf->f_size / 8); i+=2) {
         switch (vec[i]) {
             case AT_NULL:
                 // end mark

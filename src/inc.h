@@ -1,8 +1,11 @@
 #ifndef _ARTHUR_INC_H_
 #define _ARTHUR_INC_H_
 
+#if 0
 #include <sys/ptrace.h>
 #include <sys/types.h>
+#include <sys/user.h>
+#include <sys/procfs.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -23,6 +26,10 @@
 #include <memory.h>
 #include <dirent.h>
 #include <unistd.h>
+#endif
+
+#include <assert.h>
+#include <string.h>
 
 // version
 #ifndef GIT_VERSION
@@ -85,6 +92,7 @@ void _hexbuf(const char*, int);
 #endif
 
 // for path snprintf
+#undef PATH_MAX
 #define PATH_MAX    (128)
 #define PAGE_SIZE   (4096)
 

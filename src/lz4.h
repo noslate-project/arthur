@@ -84,8 +84,8 @@ struct BlockHeader {
     static BlockHeader TailMark() {
         BlockHeader hdr;
         hdr.prev_cont = 0;
-        hdr.block_type = -1;
-        hdr.size = -1;
+        hdr.block_type = -1 & 0xF;
+        hdr.size = -1 & 0x7FFFF;
         return hdr;
     }
 
