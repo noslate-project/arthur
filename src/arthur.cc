@@ -63,7 +63,7 @@ void help()
     "\n" 
     ;
 
-    printf(help);
+    puts(help);
 }
 
 int main(int argc, char *argv[])
@@ -161,6 +161,7 @@ int main(int argc, char *argv[])
         return dump.decompress(cfg.metafile, cfg.output);
     }
 
+    // merge
     if (cfg.op == ARTHUR_OP_MERGE) {
          
     }

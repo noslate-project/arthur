@@ -11,6 +11,8 @@ const char* szBlockType(BlockType t)
 #define V(a,b) case a: return b;
     switch (t) {
         BLOCK_TYPE_LIST(V)
+        default:
+            break;
     }
 #undef V
     assert(0);
@@ -120,7 +122,7 @@ int Lz4Stream::Peek(char *out, size_t n)
 // raw function for file access
 int Lz4Stream::WriteRaw(const char *s, size_t n)
 {
-    int rc = fwrite(s, 1, n, _file);
+    size_t rc = fwrite(s, 1, n, _file);
     assert (rc == n);
     return rc;
 }
@@ -162,8 +164,6 @@ int Lz4Stream::SetBlock(BlockType type)
  */
 int Lz4Stream::Write(const char *s, size_t n)
 {
-    int rc; 
-
     // enough room 
     Block& block = CurrentBlock();
     if (n <= block.Available()) {

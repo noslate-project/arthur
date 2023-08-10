@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <signal.h>
+#include <stdio.h>
+#include <string.h>
 #include "elf_defs.h"
 
 #define ALIGN_UP(addr, align) ((((uint64_t) (addr)) + ((align) - 1)) & ~((align) - 1))
@@ -139,11 +141,11 @@ struct Elf64_Ehdr {
     uint16_t      e_shstrndx;
 
     Elf64_Ehdr() :
-        e_ident({ ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3,
-                  ELFCLASS64, ELFDATA2LSB, EV_CURRENT,
-                  ELFOSABI_LINUX, 0,
-                  0,0,0,0,0,0,0
-                }),
+        e_ident{ ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3,
+                 ELFCLASS64, ELFDATA2LSB, EV_CURRENT,
+                 ELFOSABI_LINUX, 0,
+                 0,0,0,0,0,0,0
+               },
         e_type(ET_CORE),
         e_machine(EM_X86_64),
         e_version(1),
@@ -162,13 +164,59 @@ struct Elf64_Ehdr {
     }
 };
 
-
 /* Core specifications */
-
 /* Unsigned 64-bit integer aligned to 8 bytes.  */
-typedef uint64_t __attribute__ ((__aligned__ (8))) a8_uint64_t;
+//typedef uint64_t __attribute__ ((__aligned__ (8))) a8_uint64_t;
+typedef uint64_t a8_uint64_t;
 typedef a8_uint64_t elf_greg64_t;
 
+#ifdef __aarch64__
+
+struct user_regs64_struct
+{
+  uint64_t regs[31];
+  uint64_t sp;
+  uint64_t pc;
+  uint64_t pstate;
+
+#define s_pc    pc 
+#define s_sp    sp 
+#define s_fp    regs[29] 
+#define s_rc    regs[0]
+
+#define s_ag0   regs[0]
+#define s_ag1   regs[1]
+#define s_ag2   regs[2]
+#define s_ag3   regs[3]
+#define s_ag4   regs[4]
+#define s_ag5   regs[5]
+
+    static void DebugPrint(user_regs64_struct *r) {
+        for (int i=0; i<31; i++) 
+            printf("x%d = %lx (%lu)\n", i, r->regs[i], r->regs[i]);
+        printf("pc = %lx\n", r->pc);
+        printf("sp = %lx\n", r->sp);
+    }
+};
+
+struct user_fpsimd64_struct
+{
+  __uint128_t  vregs[32];
+  unsigned int fpsr;
+  unsigned int fpcr;
+};
+
+#define ELF_NGREG64 (sizeof (struct user_regs64_struct) / sizeof(elf_greg64_t))
+typedef elf_greg64_t elf_gregset64_t[ELF_NGREG64];
+typedef user_fpsimd64_struct elf_fpregset64_t;
+typedef elf_prpsinfo elf_prpsinfo64;
+typedef elf_prstatus elf_prstatus64;
+
+static_assert(sizeof(elf_prstatus64)==0x188, "invalid prstatus");
+static_assert(sizeof(elf_prpsinfo64)==0x88, "invalid prpsinfo");
+static_assert(sizeof(siginfo_t)==0x80, "invalid prpsinfo");
+
+#else 
 #define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
 
 /* Signal info.  */
@@ -208,6 +256,34 @@ struct user_regs64_struct
     a8_uint64_t es;
     a8_uint64_t fs;
     a8_uint64_t gs;
+
+#define s_pc    rip
+#define s_sp    rsp
+#define s_fp    rbp
+#define s_rc    rax
+
+#define s_ag0   rdi
+#define s_ag1   rsi
+#define s_ag2   rdx
+#define s_ag3   rcx
+#define s_ag4   r8
+#define s_ag5   r9
+
+    static void DebugPrint(user_regs64_struct *r) {
+        printf("RIP %16lx FLG %16lx\n", r->rip, r->eflags);
+        printf("RSP %16lx RBP %16lx\n", r->rsp, r->rbp);
+        printf("RAX %16lx RBX %16lx\n", r->rax, r->rbx);
+        printf("RCX %16lx RDX %16lx\n", r->rcx, r->rdx);
+        printf("RSI %16lx RDI %16lx\n", r->rsi, r->rdi);
+        printf("R8  %16lx R9  %16lx\n", r->r8, r->r9);
+        printf("R10 %16lx R11 %16lx\n", r->r10, r->r11);
+        printf("R12 %16lx R13 %16lx\n", r->r12, r->r13);
+        printf("R14 %16lx R15 %16lx\n", r->r14, r->r15);
+        printf("CS %4lx SS %4lx DS %4lx ES %4lx FS %4lx GS %4lx\n", 
+                r->cs, r->ss, r->ds, r->es, r->fs, r->gs);
+        printf("ORAX %16lx, BASE(FS %16lx, GS %16lx)\n", 
+                r->orig_rax, r->fs_base, r->gs_base);
+    }
 };
 
 struct user_fpregs64_struct
@@ -277,8 +353,9 @@ struct elf_prpsinfo64
 
 static_assert(sizeof(elf_prpsinfo64)==0x88, "invalid prpsinfo");
 
+// defined in signal.h
 static_assert(sizeof(siginfo_t)==0x80, "invalid prpsinfo");
 
-
+#endif // x86_64
 
 #endif // _ARTHUR_ELF_H_

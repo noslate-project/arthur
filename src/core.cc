@@ -1,25 +1,22 @@
 /* Arthur coredump implementation.
  */
 
-#include <sys/ptrace.h>
-#include <sys/signal.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <assert.h>
+#include <sys/ptrace.h> // PTRACE_XXX
+#include <sys/signal.h> // siginfo_t
+#include <sys/types.h>  // size_t, second_t ...
+#include <sys/wait.h>   // waitpid
+#include <sys/mman.h>   // mmap
+#include <sys/stat.h>   // fstat
+#include <sys/utsname.h>// uname 
+#include <sys/uio.h>    // pread/pwrite
 #include <stdio.h>
-#include <getopt.h>
 #include <stdlib.h>
-#include <fstream>
-#include <sys/uio.h>
-#include <assert.h>
-#include <fcntl.h>
-#include <dlfcn.h>
+#include <unistd.h>
 #include <memory.h>
-#include <dirent.h>
+#include <assert.h>
+#include <fcntl.h>      // open
+#include <dlfcn.h>      // dlsym
+#include <dirent.h>     // readdir
 
 #include <sstream>
 #include <iterator>
@@ -35,6 +32,34 @@ extern "C" {
 
 // the function is only for compile asm code.
 #define __used__ __attribute__((used))
+
+#ifdef __aarch64__
+static __used__ void inject_fork(void) 
+{
+    // aarch64 doesn't have a fork syscall, needs clone flags for fork(). 
+    asm(
+    "inject_begin: \n"
+        "mov x0, #17 \n"        // SIGCHLD
+        "movk x0, #120, lsl #16 \n" // CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID
+        "mov x1, #0 \n"
+        "mov x2, #0 \n"
+        "mov x3, #0 \n"
+        "mov x4, #0 \n"
+        "mov x8, #220 \n"       // SYS_clone
+        "svc #0 \n"
+        "cmp x0, #0 \n"
+        "beq inject_child \n"
+        "ret \n"
+    "inject_child: \n"
+        "brk #0 \n"             // generate a core by SIGTRACE
+        "mov x8, #93 \n"        // exit(0)
+        "mov x0, #0 \n"
+        "svc #0 \n"
+    "inject_end: \n"
+    );
+}
+
+#else
 static __used__ void inject_fork(void) 
 {
     /* asm code for fork injection.
@@ -54,7 +79,8 @@ static __used__ void inject_fork(void)
     "inject_end: \n"
    );
 }
-};
+#endif
+}; // extern 'C'
 
 namespace arthur {
 
@@ -63,7 +89,7 @@ void debugstr(std::string a)
         //std::string a = note.str();
         //unsigned char *ptr2 = (unsigned char*)&nh;
         unsigned char *ptr = (unsigned char*)a.c_str();
-        for (int i=0; i<a.size()+1; i++) {
+        for (size_t i=0; i<a.size()+1; i++) {
             printf(" %02x", ptr[i]);
             if ((i+1) % 16 == 0) printf("\n");
         }
@@ -134,7 +160,7 @@ uint64_t get_module_address(pid_t pid, const char* so_path)
 }
 
 // function for get function address
-uint64_t get_remote_func_address(pid_t pid,const char *so_path, char *func_name){
+static uint64_t get_remote_func_address(pid_t pid,const char *so_path, const char *func_name){
     // fix: support debian
     uint64_t l_addr = (uint64_t)dlsym(NULL, func_name); 
     assert(l_addr);
@@ -148,16 +174,16 @@ uint64_t get_remote_func_address(pid_t pid,const char *so_path, char *func_name)
 
 /* pt_ functions, for ptrace_ calls.
  */
-int pt_wait(pid_t pid)
+static inline int pt_wait(pid_t pid)
 {
-    int rc, status;
-    rc = waitpid(pid, &status, WUNTRACED);
+    int status;
+    waitpid(pid, &status, WUNTRACED);
     //assert (rc == pid);
     dprint("status = %x (%d, %d)", status, WIFSTOPPED(status), WSTOPSIG(status));
     return status;
 }
 
-int pt_detach(pid_t pid)
+static inline int pt_detach(pid_t pid)
 {
     int rc;
 
@@ -168,73 +194,92 @@ int pt_detach(pid_t pid)
     return rc;
 }
 
-int pt_getregs(pid_t pid, user_regs64_struct *pregs)
+// read all general purpose registers
+static inline int pt_getregs(pid_t pid, user_regs64_struct *pregs)
 {
     int rc;
+#ifdef __aarch64__
+    struct iovec iov;
+    iov.iov_base = pregs;
+    iov.iov_len = sizeof(user_regs64_struct);
+    rc = ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov);
+#else
     rc = ptrace(PTRACE_GETREGS, pid, NULL, pregs);
-    assert(rc == 0);
-
-#if DEBUG 
-    printf("RIP %16lx FLG %16lx\n", pregs->rip, pregs->eflags);
-    printf("RSP %16lx RBP %16lx\n", pregs->rsp, pregs->rbp);
-    printf("RAX %16lx RBX %16lx\n", pregs->rax, pregs->rbx);
-    printf("RCX %16lx RDX %16lx\n", pregs->rcx, pregs->rdx);
-    printf("RSI %16lx RDI %16lx\n", pregs->rsi, pregs->rdi);
-    printf("R8  %16lx R9  %16lx\n", pregs->r8, pregs->r9);
-    printf("R10 %16lx R11 %16lx\n", pregs->r10, pregs->r11);
-    printf("R12 %16lx R13 %16lx\n", pregs->r12, pregs->r13);
-    printf("R14 %16lx R15 %16lx\n", pregs->r14, pregs->r15);
-    printf("CS %4lx SS %4lx DS %4lx ES %4lx FS %4lx GS %4lx\n", 
-            pregs->cs, pregs->ss, pregs->ds, pregs->es, pregs->fs, pregs->gs);
-    printf("ORAX %16lx, BASE(FS %16lx, GS %16lx)\n", 
-            pregs->orig_rax, pregs->fs_base, pregs->gs_base);
 #endif
+
+    assert(rc == 0);
     return rc;
 }
 
-int pt_call(pid_t pid, user_regs64_struct *oregs, uint64_t func, int argc, uint64_t argv[])
+// write all general purpose registers
+static inline int pt_setregs(pid_t pid, user_regs64_struct *pregs)
+{
+    int rc;
+
+#ifdef __aarch64__
+    struct iovec iov;
+    iov.iov_base = pregs;
+    iov.iov_len = sizeof(user_regs64_struct);
+    rc = ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &iov);
+#else
+    rc = ptrace(PTRACE_SETREGS, pid, NULL, pregs);
+#endif
+
+    assert(rc == 0);
+    return rc;
+}
+
+/* the pt_call put a call frame with return address of ZERO on top of the current thread,
+ * and wait the SIGSEGV ocur.
+ */
+static inline int pt_call(pid_t pid, user_regs64_struct *oregs, uint64_t func, int argc, uint64_t argv[])
 {
     int rc, status = 0;
     user_regs64_struct regs;
     assert(argc <= 6);
 
-    rc = ptrace(PTRACE_GETREGS, pid, NULL, &regs);
+    // get origin regs
+    rc = pt_getregs(pid, &regs);
     assert(rc == 0);
 
     // simulate call instruction
-    regs.rsp -= 8;
-    uint64_t zero = 0;
-    rc = ptrace(PTRACE_POKEDATA, pid, regs.rsp, 0);
+#ifdef __aarch64__
+    regs.regs[30] = 0;
+#else
+    regs.s_sp -= 8;
+    //uint64_t zero = 0;
+    rc = ptrace(PTRACE_POKEDATA, pid, regs.s_sp, 0);
     assert(rc == 0);
-   
+#endif
+
     // makeup function call and arguments
-    regs.rip = func;
+    regs.s_pc = func;
     for (int i=0; i<argc; i++) {
         switch (i) {
             case 0:
-                regs.rdi = argv[0];
+                regs.s_ag0 = argv[0];
                 break;
             case 1:
-                regs.rsi = argv[1];
+                regs.s_ag1 = argv[1];
                 break; 
             case 2:
-                regs.rdx = argv[2];
+                regs.s_ag2 = argv[2];
                 break; 
             case 3:
-                regs.rcx = argv[3];
+                regs.s_ag3 = argv[3];
                 break; 
             case 4:
-                regs.r8 = argv[4];
+                regs.s_ag4 = argv[4];
                 break; 
             case 5:
-                regs.r9 = argv[5];
+                regs.s_ag5 = argv[5];
                 break;
             default:
                assert(0); 
         }
     }
-   
-    rc = ptrace(PTRACE_SETREGS, pid, NULL, &regs);
+ 
+    rc = pt_setregs(pid, &regs);
     assert(rc == 0);
 
     // wait for a SIGSEGV
@@ -264,17 +309,9 @@ int pt_call(pid_t pid, user_regs64_struct *oregs, uint64_t func, int argc, uint6
     return rc;
 }
 
-int pt_setregs(pid_t pid, user_regs64_struct *pregs)
+static inline int pt_write(pid_t pid, uint64_t dest, void *src, size_t len)
 {
     int rc;
-    rc = ptrace(PTRACE_SETREGS, pid, NULL, pregs);
-    assert(rc == 0);
-    return rc;
-}
-
-int pt_write(pid_t pid, uint64_t dest, void *src, size_t len)
-{
-    int rc, status = 0;
     char pbuf[128];
     snprintf(pbuf, sizeof(pbuf), "/proc/%u/mem", pid);
     int fd = open(pbuf, O_RDWR);
@@ -298,7 +335,7 @@ int pt_write(pid_t pid, uint64_t dest, void *src, size_t len)
     return rc;
 }
 
-int pt_attach(pid_t pid)
+static inline int pt_attach(pid_t pid)
 {
     int rc;
 
@@ -309,7 +346,7 @@ int pt_attach(pid_t pid)
     return rc;
 }
 
-int pt_int(pid_t pid)
+static inline int pt_int(pid_t pid)
 {
     int rc;
     rc = ptrace(PTRACE_INTERRUPT, pid, NULL, NULL);
@@ -319,7 +356,7 @@ int pt_int(pid_t pid)
     return rc;
 }
 
-int pt_cont(pid_t pid) {
+static inline int pt_cont(pid_t pid) {
     int rc;
     rc = ptrace(PTRACE_CONT, pid, NULL, NULL);
     assert(rc == 0);
@@ -327,7 +364,7 @@ int pt_cont(pid_t pid) {
     return rc;
 }
 
-int pt_monitor(pid_t pid) {
+static inline int pt_monitor(pid_t pid) {
     int rc;
     rc = ptrace(PTRACE_SEIZE, pid, NULL, NULL);
     assert(rc == 0);
@@ -343,7 +380,7 @@ int makeroom(FILE* fout, size_t n)
 {
     char zero[PAGE_SIZE] = {0};
 
-    int m = 0;
+    size_t m = 0;
     while (m < n) {
         size_t len = MIN(PAGE_SIZE, n-m);
         ssize_t rc = fwrite(zero, 1, len, fout);
@@ -353,7 +390,7 @@ int makeroom(FILE* fout, size_t n)
         m += rc;
     }
 
-    return m; 
+    return 0; 
 }
 
 int ProcessData::ParseAll()
@@ -386,9 +423,10 @@ int ProcessData::ParseAll()
         t._d_stat = new ProcStat(t._stat);
         assert(t._d_stat);
         t._d_stat->Parse();
-    } 
-}
+    }
 
+    return 0;
+}
 
 /* allocate a piece of NOTE memory, return the start of payload.
  */
@@ -547,6 +585,7 @@ int Note::fill_siginfo(const ThreadData& thr)
     return 0;
 }
 
+#ifdef __x86_64__
 // NT_X86_XSTATE
 int Note::fill_x86_xstate(const ThreadData& thr)
 {
@@ -554,6 +593,16 @@ int Note::fill_x86_xstate(const ThreadData& thr)
     memcpy(p, &thr._xstatereg, 2688);
     return 0;
 }
+#endif
+
+#ifdef __aarch64__
+// NT_SVE
+int Note::fill_arm_sve(const ThreadData& thr)
+{
+    // TBD: support arm sve registsers
+    return -1; 
+}
+#endif
 
 Coredump::Coredump(pid_t pid) 
     : _pid(pid)
@@ -561,10 +610,10 @@ Coredump::Coredump(pid_t pid)
 
 }
 
-
 int Coredump::WriteFileHeader(Lz4Stream& out)
 {
     AcoreHeader hdr;
+
     out.WriteRaw((const char*)&hdr, sizeof(hdr));
 
     return 0;
@@ -642,12 +691,17 @@ int Coredump::WriteThreadMeta(Lz4Stream& out, pid_t pid, bool is_main) {
     out.Write((const char*)&pid, sizeof(i._pid));
 
     // get Grnerate Registers
-    rc = ptrace(PTRACE_GETREGS, pid, 0, buf);
+    rc = pt_getregs(pid, (user_regs64_struct*)buf);
     assert(rc == 0);
     out.Write(buf, sizeof(i._regs));
 
     // get FP Registers 
+#ifdef __aarch64__
+    // TBD: ARM64 uses r14 for link register
+    //rc = ptrace(PTRACE_GETFPREGSET, pid, 0, buf);
+#else
     rc = ptrace(PTRACE_GETFPREGS, pid, 0, buf);
+#endif
     assert(rc == 0);
     out.Write(buf, sizeof(i._fpregs));
 
@@ -656,11 +710,13 @@ int Coredump::WriteThreadMeta(Lz4Stream& out, pid_t pid, bool is_main) {
     assert(rc == 0);
     out.Write(buf, sizeof(i._siginfo));
 
+#ifdef __x86_64__
     // get NT_X86_XSTATE     
     struct iovec iovec = { buf, sizeof(i._xstatereg) };
     rc = ptrace(PTRACE_GETREGSET, pid, NT_X86_XSTATE, &iovec);
     assert(rc == 0); 
     out.Write(buf, sizeof(i._xstatereg));
+#endif
 
     out.Flush();
     // read /proc/<pid>/stat
@@ -675,13 +731,13 @@ int Coredump::VerifyFileHeader(Lz4Stream& in)
     int rc;
     AcoreHeader hdr, good;
     rc = in.ReadRaw(hdr.magic, sizeof(hdr.magic));
-    if (memcmp(hdr.magic, good.magic, sizeof(hdr.magic))) {
+    if (rc != sizeof(hdr.magic) || memcmp(hdr.magic, good.magic, sizeof(hdr.magic))) {
         error("magic failed.");
         return -1;
     }
 
     rc = in.ReadRaw((char*)&hdr.version, sizeof(hdr.version));
-    if (hdr.version != 1) {
+    if (rc != sizeof(hdr.version) || hdr.version != 1) {
         error("we don't support the arthur version.");
         return -1;
     }
@@ -691,7 +747,6 @@ int Coredump::VerifyFileHeader(Lz4Stream& in)
 
 int Coredump::ReadMeta(Lz4Stream& in)
 {
-    int rc;
     Block *buf;
     BlockHeader hdr; 
 
@@ -701,7 +756,7 @@ int Coredump::ReadMeta(Lz4Stream& in)
     }
 
     // process data
-    int u;
+    int u = 0;
     int thread_num = 0;
     {
         buf->Read((char*)&u, sizeof(u));
@@ -730,7 +785,10 @@ int Coredump::ReadMeta(Lz4Stream& in)
         buf->Read((char*)&td._regs, sizeof(td._regs));
         buf->Read((char*)&td._fpregs, sizeof(td._fpregs));
         buf->Read((char*)&td._siginfo, sizeof(td._siginfo));
+
+#ifdef __x86_64__
         buf->Read((char*)&td._xstatereg, sizeof(td._xstatereg));
+#endif
 
         td._stat = in.GetFile();
         _process._threads.push_back(td);
@@ -789,9 +847,10 @@ int Coredump::WriteLoads(Lz4Stream& out, pid_t pid, ProcMaps& maps)
         // write memory dump
         size_t size = 0;
         for (uint64_t addr = r.start_addr; addr < end_addr; addr += sizeof(buf)) {
-            ssize_t len = pread(fd, buf, sizeof(buf), addr);
+            int req = MIN((end_addr - addr), sizeof(buf));
+            ssize_t len = pread(fd, buf, req, addr);
             if (len < 0) {
-                warn("pread mem(%p) failed(%d).", addr, errno);
+                warn("pread mem(%lx) failed(%d).", addr, errno);
                 break;
             }
             mem_size += len;
@@ -808,6 +867,7 @@ int Coredump::WriteLoads(Lz4Stream& out, pid_t pid, ProcMaps& maps)
  
         // update file size in phdr
         ph.p_filesz = size;
+        //printf("%lx : %ld %ld\n", ph.p_vaddr, ph.p_memsz, ph.p_filesz);
         _phdrs.emplace_back(ph);
 
         // update memory size
@@ -833,7 +893,12 @@ int Coredump::WriteElfHeader(Lz4Stream& out)
 {
     Elf64_Ehdr ehdr;
     ehdr.e_phnum = _phdrs.size();
-    
+#ifdef __aarch64__
+    ehdr.e_machine = EM_AARCH64; 
+#else
+    ehdr.e_machine = EM_X86_64; 
+#endif
+
     out.SetBlock(BLOCK_TYPE_ELF);
     out.Write((const char*)&ehdr, sizeof(ehdr));
    
@@ -842,6 +907,7 @@ int Coredump::WriteElfHeader(Lz4Stream& out)
     }
 
     out.Flush(); 
+    return 0;
 }
 
 int Coredump::WriteElfHeader(FILE* fout)
@@ -849,7 +915,10 @@ int Coredump::WriteElfHeader(FILE* fout)
     int rc = 0;
     ssize_t len;
     Elf64_Ehdr ehdr;
-    ehdr.e_phnum = _ehdr.e_phnum;
+   
+    ehdr.e_machine = _ehdr.e_machine;
+    ehdr.e_phnum = _phdrs.size();
+
     len = fwrite(&ehdr, 1, sizeof(ehdr), fout);
     assert(len == sizeof(ehdr));
     rc += len;
@@ -910,7 +979,7 @@ int Coredump::ReadElfHeader(Lz4Stream& in)
 int Coredump::ReadLoads(Lz4Stream& in, FILE* fout)
 {
     int rc;
-    size_t file_size = 0;
+    //size_t file_size = 0;
     size_t loads_size = 0;
 
 #if 0
@@ -934,14 +1003,14 @@ int Coredump::ReadLoads(Lz4Stream& in, FILE* fout)
         Block *block = in.ReadBlock(hdr);
         assert(block);
 
-        ssize_t len = fwrite(block->rBuf(), 1, block->Size(), fout);
+        size_t len = fwrite(block->rBuf(), 1, block->Size(), fout);
         assert(len == block->Size());
 
-        file_size += hdr.size;
+        //file_size += hdr.size;
         loads_size += block->Size();
     }
 
-    dprint("Readloads: file(%lu), data(%lu)", file_size, loads_size);
+    //dprint("Readloads: file(%lu), data(%lu)", file_size, loads_size);
     return loads_size;
 }
 
@@ -970,6 +1039,7 @@ int Coredump::GenerateNotes()
         nt->fill_prstatus(i);
         _notes.push_back(nt);
 
+#ifdef __x86_64__
         // NT_FPREGSET (floating point registers)
         nt = new Note(NT_FPREGSET);
         nt->fill_fpregset(i);
@@ -979,6 +1049,7 @@ int Coredump::GenerateNotes()
         nt = new Note(NT_X86_XSTATE);
         nt->fill_x86_xstate(i);
         _notes.push_back(nt);
+#endif
 
         // NT_SIGINFO (siginfo_t data)
         nt = new Note(NT_SIGINFO);
@@ -1133,10 +1204,11 @@ int Coredump::forkcore(const char *corefile, bool sys_core)
     const char *so_path = "libc";
     uint64_t r_mmap = get_remote_func_address(_pid, so_path, "mmap");
     uint64_t r_munmap = get_remote_func_address(_pid, so_path, "munmap");
-    uint64_t r_fork = get_remote_func_address(_pid, so_path, "fork");
+    //uint64_t r_fork = get_remote_func_address(_pid, so_path, "fork");
     uint64_t r_waitpid = get_remote_func_address(_pid, so_path, "waitpid");
-    info("remote mmap at %p", r_mmap);
-    info("remote fork at %p", r_fork);
+    info("remote mmap at %lx", r_mmap);
+    //info("remote fork at %p", r_fork);
+    info("remote waitpid at %lx", r_waitpid);
 
     // save the program regs
     user_regs64_struct saved_regs;
@@ -1144,36 +1216,41 @@ int Coredump::forkcore(const char *corefile, bool sys_core)
 
     // get a page for shellcode
     user_regs64_struct regs;
+
     uint64_t inject_page = 0;
     {
+        //uint64_t gv[6] = {0, 0x1000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_PRIVATE, 0, 0};
         uint64_t gv[6] = {0, 0x1000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_PRIVATE, 0, 0};
         pt_call(_pid, &regs, r_mmap, 6, gv);
-        info("mmap = %p", regs.rax);
-        inject_page = regs.rax;
+        info("mmap = %lx", regs.s_rc);
+        inject_page = regs.s_rc;
     }
     pt_getregs(_pid, &regs);
 
     // inject fork
     {
         char *inject_begin=0, *inject_end=0; 
-        asm ("mov $inject_begin, %0 \n"
-             : "=r" (inject_begin));
-        asm ("mov $inject_end, %0 \n"
-             : "=r" (inject_end));
+#ifdef __aarch64__
+        asm ("adr %0, inject_begin\n" : "=r" (inject_begin));
+        asm ("adr %0, inject_end\n" : "=r" (inject_end));
+#else
+        asm ("mov $inject_begin, %0 \n" : "=r" (inject_begin));
+        asm ("mov $inject_end, %0 \n" : "=r" (inject_end));
+#endif
         int inject_size = (inject_end - inject_begin);
         dprint("inject_range(%p - %p), size(%d)", inject_begin, inject_end, inject_size);
      
         pt_write(_pid, inject_page, (void *)inject_fork, inject_size);
         pt_call(_pid, &regs, inject_page, 0, NULL);
-        info("child_pid = %d", regs.rax);
-        _core_pid = regs.rax;
+        info("child_pid = %d", (int)regs.s_rc);
+        _core_pid = regs.s_rc;
     }
 
     // munmap injected page.
     {
         uint64_t gv[2] = {inject_page, 0x1000};
         pt_call(_pid, &regs, r_munmap, 2, gv);
-        info("munmap = %d", (int)regs.rax);
+        info("munmap = %d", (int)regs.s_rc);
     }
 
     // restore program 
@@ -1185,14 +1262,11 @@ int Coredump::forkcore(const char *corefile, bool sys_core)
     }
     ts_pause.end();
 
-    // TBD: dump memory regions
     if (!sys_core) {
         // write acore
-        {
-            WriteLoads(out, _core_pid, maps);
-            WriteElfHeader(out);
-            WriteTailMark(out);
-        }
+        WriteLoads(out, _core_pid, maps);
+        WriteElfHeader(out);
+        WriteTailMark(out);
     }
 
     // kill the forked process
@@ -1204,9 +1278,9 @@ int Coredump::forkcore(const char *corefile, bool sys_core)
     pt_attach(_pid);
     pt_getregs(_pid, &saved_regs);
     {
-        uint64_t gv[3] = {(uint64_t)_core_pid, NULL, 0};
+        uint64_t gv[3] = { (uint64_t)_core_pid, (uint64_t)NULL, 0 };
         pt_call(_pid, &regs, r_waitpid, 3, gv);
-        info("waitpid = %d", (int)regs.rax);
+        info("waitpid = %d", (int)regs.s_rc);
     }
     pt_setregs(_pid, &saved_regs);
     pt_detach(_pid);
@@ -1234,7 +1308,7 @@ int Coredump::forkcore_m(const char *corefile, bool sys_core)
      * the two parts should be merged by arthur merge command to generate the final corefile.
      */
 
-    int rc, status;
+    int rc;
     Lz4Stream out(Lz4Stream::LZ4_Compress);
     rc = out.Open(corefile);
     if (rc < 0) {
@@ -1288,10 +1362,10 @@ int Coredump::forkcore_m(const char *corefile, bool sys_core)
     const char *so_path = "libc";
     uint64_t r_mmap = get_remote_func_address(_pid, so_path, "mmap");
     uint64_t r_munmap = get_remote_func_address(_pid, so_path, "munmap");
-    uint64_t r_fork = get_remote_func_address(_pid, so_path, "fork");
+    //uint64_t r_fork = get_remote_func_address(_pid, so_path, "fork");
     uint64_t r_waitpid = get_remote_func_address(_pid, so_path, "waitpid");
-    info("remote mmap at %p", r_mmap);
-    info("remote fork at %p", r_fork);
+    info("remote mmap at %lx", r_mmap);
+    info("remote waitpid at %lx", r_waitpid);
 
     // save the program regs
     user_regs64_struct saved_regs;
@@ -1303,32 +1377,35 @@ int Coredump::forkcore_m(const char *corefile, bool sys_core)
     {
         uint64_t gv[6] = {0, 0x1000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_PRIVATE, 0, 0};
         pt_call(_pid, &regs, r_mmap, 6, gv);
-        info("mmap = %p", regs.rax);
-        inject_page = regs.rax;
+        info("mmap = %lx", regs.s_rc);
+        inject_page = regs.s_rc;
     }
     pt_getregs(_pid, &regs);
 
     // inject fork
     {
         char *inject_begin=0, *inject_end=0; 
-        asm ("mov $inject_begin, %0 \n"
-             : "=r" (inject_begin));
-        asm ("mov $inject_end, %0 \n"
-             : "=r" (inject_end));
+#ifdef __aarch64__
+        asm ("adr %0, inject_begin\n" : "=r" (inject_begin));
+        asm ("adr %0, inject_end\n" : "=r" (inject_end));
+#else
+        asm ("mov $inject_begin, %0 \n" : "=r" (inject_begin));
+        asm ("mov $inject_end, %0 \n" : "=r" (inject_end));
+#endif        
         int inject_size = (inject_end - inject_begin);
         dprint("inject_range(%p - %p), size(%d)", inject_begin, inject_end, inject_size);
      
         pt_write(_pid, inject_page, (void *)inject_fork, inject_size);
         pt_call(_pid, &regs, inject_page, 0, NULL);
-        info("child_pid = %d", regs.rax);
-        _core_pid = regs.rax;
+        info("child_pid = %d", (int)regs.s_rc);
+        _core_pid = regs.s_rc;
     }
 
     // munmap injected page.
     {
         uint64_t gv[2] = {inject_page, 0x1000};
         pt_call(_pid, &regs, r_munmap, 2, gv);
-        info("munmap = %d", (int)regs.rax);
+        info("munmap = %d", (int)regs.s_rc);
     }
 
     // restore program regs
@@ -1386,9 +1463,9 @@ int Coredump::forkcore_m(const char *corefile, bool sys_core)
     }
     pt_getregs(_pid, &saved_regs);
     {
-        uint64_t gv[3] = {(uint64_t)_core_pid, NULL, 0};
+        uint64_t gv[3] = {(uint64_t)_core_pid, (uint64_t)NULL, 0};
         pt_call(_pid, &regs, r_waitpid, 3, gv);
-        info("waitpid = %d", (int)regs.rax);
+        info("waitpid = %d", (int)regs.s_rc);
     }
     pt_setregs(_pid, &saved_regs);
     if(!WIFSTOPPED(s)) {
@@ -1401,7 +1478,7 @@ int Coredump::forkcore_m(const char *corefile, bool sys_core)
 
     // clean pending signal generated above by tracee
     sigset_t mask;
-    siginfo_t sig_info;
+    //siginfo_t sig_info;
     sigaddset(&mask, SIGCHLD);
     sigwaitinfo(&mask, NULL);
 
@@ -1429,7 +1506,7 @@ int Coredump::monitor(const char* corefile)
     info("Launched in monitor mode");
 
     // block all signals
-    sigset_t mask, prev;
+    sigset_t mask;
     sigaddset(&mask, SIGCHLD); // signal from tracee
     sigaddset(&mask, SIGUSR1); // signal for generating corefile while monitor
     sigprocmask(SIG_BLOCK, &mask, NULL);
@@ -1445,7 +1522,7 @@ int Coredump::monitor(const char* corefile)
                 exit_sig = signal_forkcore;
                 break;
             } else { // relay signals to tracee
-                ptrace(PTRACE_CONT, _pid, NULL, (void*) signal_forkcore);
+                ptrace(PTRACE_CONT, _pid, NULL, (uintptr_t) signal_forkcore);
                 signal_forkcore = 0; // reset forkcore signal
                 continue;
             }
@@ -1463,7 +1540,7 @@ int Coredump::monitor(const char* corefile)
                     info("process %d exit voluntarily", _pid);
                 } else { // process exits on receving signal
                     info("%s: process %d exit voluntarily", strsignal(status), _pid);
-                    ptrace(PTRACE_DETACH, _pid, NULL, (void*) status);
+                    ptrace(PTRACE_DETACH, _pid, NULL, (uintptr_t) status);
                 }
                 return 0;
             } else if (status == SIGILL || status == SIGABRT || status == SIGSEGV) {
@@ -1471,7 +1548,7 @@ int Coredump::monitor(const char* corefile)
                 exit_sig = status;
                 break;
             } else { // relay signals to tracee
-                ptrace(PTRACE_CONT, _pid, NULL, (void*) status);
+                ptrace(PTRACE_CONT, _pid, NULL, (uintptr_t) status);
             }
             signal_forkcore = 0; // reset signal 
         } else { 
@@ -1524,7 +1601,7 @@ int Coredump::monitor(const char* corefile)
 
     for (pid_t& tid : _process._thrd_pid) {
         // cannot guarantee thread exit order, not to check ptrace rc
-        ptrace(PTRACE_DETACH, tid, NULL, (void *) exit_sig);
+        ptrace(PTRACE_DETACH, tid, NULL, (uintptr_t) exit_sig);
     }
     out.PrintStat();
     out.Close();
@@ -1617,13 +1694,13 @@ int Coredump::test_compress(const char* in_file, const char* out_file)
     size_t data_size = 0, file_size = 0;
     char buf[4*1024];
     for (;;) {
-        int len = fread(buf, 1, sizeof(buf), fin);
-        if (len <= 0) {
-            error("read failed (%d)", len);
+        size_t len = fread(buf, 1, sizeof(buf), fin);
+        if (len == 0) {
+            error("read failed (%ld)", len);
             break;
         } 
         
-        for (ssize_t i=0; i<len; i+= BLOCK_SIZE) {
+        for (size_t i=0; i<len; i+= BLOCK_SIZE) {
             size_t j = MIN(len - i, BLOCK_SIZE);
             int rc = out.Write((const char*)(buf+i), j);
             assert(rc > 0);
@@ -1668,8 +1745,8 @@ int Coredump::test_decompress(const char* in_file, const char* out_file)
             break;
         }
 
-        int len = fwrite(block->rBuf(), 1, block->Size(), fout);
-        if (len != block->Size()) {
+        ssize_t len = fwrite(block->rBuf(), 1, block->Size(), fout);
+        if (len != (int)block->Size()) {
             break;
         }
         file_size += len; 
@@ -1677,7 +1754,7 @@ int Coredump::test_decompress(const char* in_file, const char* out_file)
     fclose(fout);
     in.Close();
 
-    info("write %u bytes.", file_size);
+    info("write %lu bytes.", file_size);
     return 0;
 }
 

@@ -1,6 +1,13 @@
 CC := g++
-CCFLAGS += -std=c++11 -Wall -g -O2
-LDFLAGS += -Wl,--gc-sections -Wl,--as-needed -Llib -llz4 -ldl 
+CCFLAGS += -std=c++11 -Wall -g -O0
+
+ARCH=$(shell uname -m)
+ifeq ($(ARCH), aarch64)
+	LIBRARY	= -llz4-arm64
+else
+	LIBRARY = -llz4-x64
+endif
+LDFLAGS += -Wl,--gc-sections -Wl,--as-needed -Llib $(LIBRARY) -ldl 
 
 GIT_VERSION := $(shell git describe --abbrev=6 --dirty --always --tags)
 

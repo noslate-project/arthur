@@ -60,6 +60,7 @@
 #define EM_LIST(V) \
     V(EM_NONE, 0) \
     V(EM_X86_64, 62) \
+    V(EM_AARCH64, 183)
 
 // Program types
 #define PT_LIST(V) \
