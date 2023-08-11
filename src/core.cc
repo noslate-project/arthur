@@ -224,7 +224,7 @@ static inline int pt_getfpregs(pid_t pid, user_fpregs64_struct *pregs)
 #ifdef __aarch64__
     struct iovec iov;
     iov.iov_base = pregs;
-    iov.iov_len = sizeof(user_regs64_struct);
+    iov.iov_len = sizeof(user_fpregs64_struct);
     rc = ptrace(PTRACE_GETREGSET, pid, NT_FPREGSET, &iov);
 #else
     rc = ptrace(PTRACE_GETFPREGS, pid, NULL, pregs);
