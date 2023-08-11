@@ -827,7 +827,7 @@ int Coredump::ReadMeta(Lz4Stream& in)
         buf->Read((char*)&td._regs, sizeof(td._regs));
         buf->Read((char*)&td._fpregs, sizeof(td._fpregs));
         buf->Read((char*)&td._siginfo, sizeof(td._siginfo));
-        buf->Read((char*)&td._xstate, sizeof(td._xstate));
+        //buf->Read((char*)&td._xstate, sizeof(td._xstate));
 
         td._stat = in.GetFile();
         _process._threads.push_back(td);
