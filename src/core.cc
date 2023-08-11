@@ -269,9 +269,8 @@ static inline int pt_call(pid_t pid, user_regs64_struct *oregs, uint64_t func, i
 #ifdef __aarch64__
     regs.regs[30] = 0;
 #else
-    regs.s_sp -= 8;
-    //uint64_t zero = 0;
-    rc = ptrace(PTRACE_POKEDATA, pid, regs.s_sp, 0);
+    regs.rsp -= 8;
+    rc = ptrace(PTRACE_POKEDATA, pid, regs.rsp, 0);
     assert(rc == 0);
 #endif
 
