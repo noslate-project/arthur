@@ -234,6 +234,20 @@ static inline int pt_getfpregs(pid_t pid, user_fpregs64_struct *pregs)
     return rc;
 }
 
+// read all xstate registers (x64)
+static inline int pt_getxstateregs(pid_t pid, x64_xstatereg *pregs)
+{
+    int rc;
+
+    struct iovec iov;
+    iov.iov_base = pregs;
+    iov.iov_len = sizeof(x64_xstatereg);
+    rc = ptrace(PTRACE_GETREGSET, pid, NT_X86_XSTATE, &iov);
+
+    assert(rc == 0);
+    return rc;
+}
+
 // write all general purpose registers
 static inline int pt_setregs(pid_t pid, user_regs64_struct *pregs)
 {
@@ -630,22 +644,20 @@ int Note::fill_siginfo(const ThreadData& thr)
     return 0;
 }
 
-#if 0
 // NT_X86_XSTATE
 int Note::fill_x86_xstate(const ThreadData& thr)
 {
     char *p = allocate(2688);
-    memcpy(p, &thr._xstatereg, 2688);
+    memcpy(p, &thr._xstate.x64, 2688);
     return 0;
 }
 
-// NT_SVE
+// NT_ARM_SVE
 int Note::fill_arm_sve(const ThreadData& thr)
 {
     // TBD: support arm sve registsers
     return -1; 
 }
-#endif
 
 Coredump::Coredump(pid_t pid) 
     : _pid(pid)
@@ -748,13 +760,12 @@ int Coredump::WriteThreadMeta(Lz4Stream& out, pid_t pid, bool is_main) {
     assert(rc == 0);
     out.Write(buf, sizeof(i._siginfo));
 
-#if 0
-    // get NT_X86_XSTATE     
-    struct iovec iovec = { buf, sizeof(i._xstatereg) };
-    rc = ptrace(PTRACE_GETREGSET, pid, NT_X86_XSTATE, &iovec);
-    assert(rc == 0); 
-    out.Write(buf, sizeof(i._xstatereg));
-#endif
+    if (_arch == ARCH_X64) {
+        // get NT_X86_XSTATE     
+        rc = pt_getxstateregs(pid, (x64_xstatereg*)&i._xstate);
+        assert(rc == 0);
+        out.Write(buf, sizeof(i._xstate.x64));
+    }
 
     out.Flush();
     // read /proc/<pid>/stat
@@ -824,10 +835,17 @@ int Coredump::ReadMeta(Lz4Stream& in)
         buf = in.ReadBlock(hdr);
         
         buf->Read((char*)&td._pid, sizeof(td._pid));
-        buf->Read((char*)&td._regs, sizeof(td._regs));
-        buf->Read((char*)&td._fpregs, sizeof(td._fpregs));
-        buf->Read((char*)&td._siginfo, sizeof(td._siginfo));
-        //buf->Read((char*)&td._xstate, sizeof(td._xstate));
+
+        if (_arch == ARCH_X64) {
+            buf->Read((char*)&td._regs, sizeof(td._regs.x64));
+            buf->Read((char*)&td._fpregs, sizeof(td._fpregs.x64));
+            buf->Read((char*)&td._siginfo, sizeof(td._siginfo));
+            buf->Read((char*)&td._xstate, sizeof(td._xstate.x64));
+        } else if (_arch == ARCH_AARCH64) {
+            buf->Read((char*)&td._regs, sizeof(td._regs.arm64));
+            buf->Read((char*)&td._fpregs, sizeof(td._fpregs.arm64));
+            buf->Read((char*)&td._siginfo, sizeof(td._siginfo));
+        }
 
         td._stat = in.GetFile();
         _process._threads.push_back(td);
@@ -1084,13 +1102,13 @@ int Coredump::GenerateNotes()
         nt = new Note(NT_FPREGSET);
         nt->fill_fpregset(i);
         _notes.push_back(nt);
-        
-#if 0
-        // NT_X86_XSTATE (x86 XSAVE extended state)
-        nt = new Note(NT_X86_XSTATE);
-        nt->fill_x86_xstate(i);
-        _notes.push_back(nt);
-#endif
+
+        if (_arch == ARCH_X64) {        
+            // NT_X86_XSTATE (x86 XSAVE extended state)
+            nt = new Note(NT_X86_XSTATE);
+            nt->fill_x86_xstate(i);
+            _notes.push_back(nt);
+        }
 
         // NT_SIGINFO (siginfo_t data)
         nt = new Note(NT_SIGINFO);
