@@ -167,31 +167,38 @@ struct Elf64_Ehdr {
 /* Core specifications */
 /* Unsigned 64-bit integer aligned to 8 bytes.  */
 //typedef uint64_t __attribute__ ((__aligned__ (8))) a8_uint64_t;
-typedef uint64_t a8_uint64_t;
-typedef a8_uint64_t elf_greg64_t;
+typedef uint64_t elf_greg64_t;
 
-#ifdef __aarch64__
-
-struct user_regs64_struct
+// general purpose registers for arm64
+struct arm64_user_regs64_struct
 {
-  uint64_t regs[31];
-  uint64_t sp;
-  uint64_t pc;
-  uint64_t pstate;
+    uint64_t regs[31];
+    uint64_t sp;
+    uint64_t pc;
+    uint64_t pstate;
 
-#define s_pc    pc 
-#define s_sp    sp 
-#define s_fp    regs[29] 
-#define s_rc    regs[0]
+    inline uint64_t get_pc() { return pc; }
+    inline uint64_t get_sp() { return sp; }
+    inline uint64_t get_rc() { return regs[0]; }
+#if 0
+    inline uint64_t get_arg0() { return regs[0]; }
+    inline uint64_t get_arg1() { return regs[1]; }
+    inline uint64_t get_arg2() { return regs[2]; }
+    inline uint64_t get_arg3() { return regs[3]; }
+    inline uint64_t get_arg4() { return regs[4]; }
+    inline uint64_t get_arg5() { return regs[5]; }
+#endif
 
-#define s_ag0   regs[0]
-#define s_ag1   regs[1]
-#define s_ag2   regs[2]
-#define s_ag3   regs[3]
-#define s_ag4   regs[4]
-#define s_ag5   regs[5]
+    inline void set_pc(uint64_t v) { pc = v; }
+    inline void set_sp(uint64_t v) { sp = v; }
+    inline uint64_t set_arg0(uint64_t v) { return regs[0] = v; }
+    inline uint64_t set_arg1(uint64_t v) { return regs[1] = v; }
+    inline uint64_t set_arg2(uint64_t v) { return regs[2] = v; }
+    inline uint64_t set_arg3(uint64_t v) { return regs[3] = v; }
+    inline uint64_t set_arg4(uint64_t v) { return regs[4] = v; }
+    inline uint64_t set_arg5(uint64_t v) { return regs[5] = v; }
 
-    static void DebugPrint(user_regs64_struct *r) {
+    static void DebugPrint(arm64_user_regs64_struct *r) {
         for (int i=0; i<31; i++) 
             printf("x%d = %lx (%lu)\n", i, r->regs[i], r->regs[i]);
         printf("pc = %lx\n", r->pc);
@@ -199,77 +206,80 @@ struct user_regs64_struct
     }
 };
 
-struct user_fpsimd64_struct
+// fp and simd register for arm64
+struct arm64_user_fpsimd64_struct
 {
   __uint128_t  vregs[32];
   unsigned int fpsr;
   unsigned int fpcr;
 };
 
+static_assert(sizeof(arm64_user_fpsimd64_struct)==528, "invalid prstatus");
+
+typedef arm64_user_fpsimd64_struct arm64_elf_fpregset;
+
+#if 0
 #define ELF_NGREG64 (sizeof (struct user_regs64_struct) / sizeof(elf_greg64_t))
 typedef elf_greg64_t elf_gregset64_t[ELF_NGREG64];
-typedef user_fpsimd64_struct elf_fpregset64_t;
 typedef elf_prpsinfo elf_prpsinfo64;
 typedef elf_prstatus elf_prstatus64;
+#endif
 
-static_assert(sizeof(elf_prstatus64)==0x188, "invalid prstatus");
-static_assert(sizeof(elf_prpsinfo64)==0x88, "invalid prpsinfo");
-static_assert(sizeof(siginfo_t)==0x80, "invalid prpsinfo");
 
-#else 
-#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
-
-/* Signal info.  */
-struct elf_siginfo
-  {
-    int si_signo;			/* Signal number.  */
-    int si_code;			/* Extra code.  */
-    int si_errno;			/* Errno.  */
-  };
-
-struct user_regs64_struct
+// genenal purpose registers for x64
+struct x64_user_regs64_struct
 {
-    a8_uint64_t r15;
-    a8_uint64_t r14;
-    a8_uint64_t r13;
-    a8_uint64_t r12;
-    a8_uint64_t rbp;
-    a8_uint64_t rbx;
-    a8_uint64_t r11;
-    a8_uint64_t r10;
-    a8_uint64_t r9;
-    a8_uint64_t r8;
-    a8_uint64_t rax;
-    a8_uint64_t rcx;
-    a8_uint64_t rdx;
-    a8_uint64_t rsi;
-    a8_uint64_t rdi;
-    a8_uint64_t orig_rax;
-    a8_uint64_t rip;
-    a8_uint64_t cs;
-    a8_uint64_t eflags;
-    a8_uint64_t rsp;
-    a8_uint64_t ss;
-    a8_uint64_t fs_base;
-    a8_uint64_t gs_base;
-    a8_uint64_t ds;
-    a8_uint64_t es;
-    a8_uint64_t fs;
-    a8_uint64_t gs;
+    uint64_t r15;
+    uint64_t r14;
+    uint64_t r13;
+    uint64_t r12;
+    uint64_t rbp;
+    uint64_t rbx;
+    uint64_t r11;
+    uint64_t r10;
+    uint64_t r9;
+    uint64_t r8;
+    uint64_t rax;
+    uint64_t rcx;
+    uint64_t rdx;
+    uint64_t rsi;
+    uint64_t rdi;
+    uint64_t orig_rax;
+    uint64_t rip;
+    uint64_t cs;
+    uint64_t eflags;
+    uint64_t rsp;
+    uint64_t ss;
+    uint64_t fs_base;
+    uint64_t gs_base;
+    uint64_t ds;
+    uint64_t es;
+    uint64_t fs;
+    uint64_t gs;
 
-#define s_pc    rip
-#define s_sp    rsp
-#define s_fp    rbp
-#define s_rc    rax
+    inline uint64_t get_pc() { return rip; }
+    inline uint64_t get_sp() { return rsp; }
+    inline uint64_t get_rc() { return rax; }
+#if 0
+    inline uint64_t get_arg0(int i) { return rdi; }
+    inline uint64_t get_arg1(int i) { return rsi; }
+    inline uint64_t get_arg2(int i) { return rdx; }
+    inline uint64_t get_arg3(int i) { return rcx; }
+    inline uint64_t get_arg4(int i) { return r8; }
+    inline uint64_t get_arg5(int i) { return r9; }
+#endif
 
-#define s_ag0   rdi
-#define s_ag1   rsi
-#define s_ag2   rdx
-#define s_ag3   rcx
-#define s_ag4   r8
-#define s_ag5   r9
+    inline void set_pc(uint64_t v) { rip = v; }
+    inline void set_sp(uint64_t v) { rsp = v; }
+    //inline void set_rc(uint64_t v) { rax = v; }
+    inline uint64_t set_arg0(uint64_t v) { return rdi = v; }
+    inline uint64_t set_arg1(uint64_t v) { return rsi = v; }
+    inline uint64_t set_arg2(uint64_t v) { return rdx = v; }
+    inline uint64_t set_arg3(uint64_t v) { return rcx = v; }
+    inline uint64_t set_arg4(uint64_t v) { return r8 = v; }
+    inline uint64_t set_arg5(uint64_t v) { return r9 = v; }
 
-    static void DebugPrint(user_regs64_struct *r) {
+    static void DebugPrint(x64_user_regs64_struct *r) {
         printf("RIP %16lx FLG %16lx\n", r->rip, r->eflags);
         printf("RSP %16lx RBP %16lx\n", r->rsp, r->rbp);
         printf("RAX %16lx RBX %16lx\n", r->rax, r->rbx);
@@ -286,7 +296,8 @@ struct user_regs64_struct
     }
 };
 
-struct user_fpregs64_struct
+// fp registers for x64 
+struct x64_user_fpregs64_struct
 {
   unsigned short int	cwd;
   unsigned short int	swd;
@@ -300,29 +311,44 @@ struct user_fpregs64_struct
   unsigned int		xmm_space[64];  /* 16*16 bytes for each XMM-reg = 256 bytes */
   unsigned int		padding[24];
 };
+static_assert(sizeof(x64_user_fpregs64_struct)==0x200, "invalid prstatus");
 
-static_assert(sizeof(user_fpregs64_struct)==0x200, "invalid prstatus");
+typedef x64_user_fpregs64_struct x64_elf_fpregset;
 
-#define ELF_NGREG64 (sizeof (struct user_regs64_struct) / sizeof(elf_greg64_t))
-typedef elf_greg64_t elf_gregset64_t[ELF_NGREG64];
+// gregset for x64
+#define X64_NGREG64 (sizeof (struct x64_user_regs64_struct) / sizeof(elf_greg64_t))
+typedef elf_greg64_t x64_gregset64_t[X64_NGREG64];
 
-typedef user_fpregs64_struct elf_fpregset64_t;
+// gregset for arm64
+#define ARM64_NGREG64 (sizeof (struct arm64_user_regs64_struct) / sizeof(elf_greg64_t))
+typedef elf_greg64_t arm64_gregset64_t[ARM64_NGREG64];
 
+// x64 xstate 
 #define X86_XSTATE_MAX_SIZE 2696
-typedef char elf_x86xstatereg[X86_XSTATE_MAX_SIZE];
+typedef char x64_xstatereg[X86_XSTATE_MAX_SIZE];
 
-struct prstatus64_timeval
+// signal info struct used in prstatus
+struct elf_siginfo64
 {
-    a8_uint64_t tv_sec;
-    a8_uint64_t tv_usec;
+    int si_signo;			/* Signal number.  */
+    int si_code;			/* Extra code.  */
+    int si_errno;			/* Errno.  */
 };
 
-struct elf_prstatus64
+// timeval struct used in prstatus
+struct prstatus64_timeval
 {
-    struct elf_siginfo pr_info;	/* Info associated with signal.  */
+    uint64_t tv_sec;
+    uint64_t tv_usec;
+};
+
+// prstatus for arm64
+struct arm64_elf_prstatus
+{
+    struct elf_siginfo64 pr_info;	/* Info associated with signal.  */
     short int pr_cursig;		/* Current signal.  */
-    a8_uint64_t pr_sigpend;		/* Set of pending signals.  */
-    a8_uint64_t pr_sighold;		/* Set of held signals.  */
+    uint64_t pr_sigpend;		/* Set of pending signals.  */
+    uint64_t pr_sighold;		/* Set of held signals.  */
     pid_t pr_pid;
     pid_t pr_ppid;
     pid_t pr_pgrp;
@@ -331,31 +357,63 @@ struct elf_prstatus64
     struct prstatus64_timeval pr_stime;		/* System time.  */
     struct prstatus64_timeval pr_cutime;	/* Cumulative user time.  */
     struct prstatus64_timeval pr_cstime;	/* Cumulative system time.  */
-    elf_gregset64_t pr_reg;		/* GP registers.  */
+    arm64_gregset64_t pr_reg;		/* GP registers.  */
     int pr_fpvalid;			/* True if math copro being used.  */
 };
 
-static_assert(sizeof(elf_prstatus64)==0x150, "invalid prstatus");
+static_assert(sizeof(arm64_elf_prstatus)==0x188, "invalid prstatus");
 
+// prstatus for x64
+struct x64_elf_prstatus
+{
+    struct elf_siginfo64 pr_info;	/* Info associated with signal.  */
+    short int pr_cursig;		/* Current signal.  */
+    uint64_t pr_sigpend;		/* Set of pending signals.  */
+    uint64_t pr_sighold;		/* Set of held signals.  */
+    pid_t pr_pid;
+    pid_t pr_ppid;
+    pid_t pr_pgrp;
+    pid_t pr_sid;
+    struct prstatus64_timeval pr_utime;		/* User time.  */
+    struct prstatus64_timeval pr_stime;		/* System time.  */
+    struct prstatus64_timeval pr_cutime;	/* Cumulative user time.  */
+    struct prstatus64_timeval pr_cstime;	/* Cumulative system time.  */
+    x64_gregset64_t pr_reg;		/* GP registers.  */
+    int pr_fpvalid;			/* True if math copro being used.  */
+};
+
+static_assert(sizeof(x64_elf_prstatus)==0x150, "invalid prstatus");
+
+// prpsinfo
 struct elf_prpsinfo64
 {
     char pr_state;			/* Numeric process state.  */
     char pr_sname;			/* Char for pr_state.  */
     char pr_zomb;			/* Zombie.  */
     char pr_nice;			/* Nice val.  */
-    a8_uint64_t pr_flag;	/* Flags.  */
+    uint64_t pr_flag;	/* Flags.  */
     unsigned int pr_uid;
     unsigned int pr_gid;
     int pr_pid, pr_ppid, pr_pgrp, pr_sid;
     char pr_fname[16];			/* Filename of executable.  */
+#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
     char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
 };
 
 static_assert(sizeof(elf_prpsinfo64)==0x88, "invalid prpsinfo");
 
-// defined in signal.h
+// siginfo_t
 static_assert(sizeof(siginfo_t)==0x80, "invalid prpsinfo");
 
-#endif // x86_64
+#ifdef __aarch64__
+typedef arm64_user_regs64_struct    user_regs64_struct;
+typedef arm64_user_fpsimd64_struct  user_fpregs64_struct;
+
+#elif __x86_64__
+typedef x64_user_regs64_struct      user_regs64_struct;
+typedef x64_user_fpregs64_struct    user_fpregs64_struct;
+
+#endif
+
 
 #endif // _ARTHUR_ELF_H_

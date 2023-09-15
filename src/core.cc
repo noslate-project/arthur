@@ -24,9 +24,13 @@
 #include "core.h"
 #include "proc.h"
 
+// arthur only use a memory of BUFFER_SIZE on main stack.
+#define BUFFER_SIZE 1L*1024*1024         // general buffer size to store data
+#define ARTHUR_BUFFER_SIZE 2L*1024*1024  // take up 2M physical memory on stack
+
+static_assert(BUFFER_SIZE >= 1*1024*1024, "buffer size should more than 1MB.");
+
 #define roundup(x,n) (((x)+((n)-1))&(~((n)-1)))
-#define ARTHUR_BUFFER_SIZE 2*1024*1024  // take up 2M physical memory on stack
-#define BUFFER_SIZE 1*1024*1024         // general buffer size to store data
 
 extern "C" {
 
@@ -198,6 +202,7 @@ static inline int pt_detach(pid_t pid)
 static inline int pt_getregs(pid_t pid, user_regs64_struct *pregs)
 {
     int rc;
+
 #ifdef __aarch64__
     struct iovec iov;
     iov.iov_base = pregs;
@@ -206,6 +211,38 @@ static inline int pt_getregs(pid_t pid, user_regs64_struct *pregs)
 #else
     rc = ptrace(PTRACE_GETREGS, pid, NULL, pregs);
 #endif
+
+    assert(rc == 0);
+    return rc;
+}
+
+// read all fp registers
+static inline int pt_getfpregs(pid_t pid, user_fpregs64_struct *pregs)
+{
+    int rc;
+
+#ifdef __aarch64__
+    struct iovec iov;
+    iov.iov_base = pregs;
+    iov.iov_len = sizeof(user_fpregs64_struct);
+    rc = ptrace(PTRACE_GETREGSET, pid, NT_FPREGSET, &iov);
+#else
+    rc = ptrace(PTRACE_GETFPREGS, pid, NULL, pregs);
+#endif
+
+    assert(rc == 0);
+    return rc;
+}
+
+// read all xstate registers (x64)
+static inline int pt_getxstateregs(pid_t pid, x64_xstatereg *pregs)
+{
+    int rc;
+
+    struct iovec iov;
+    iov.iov_base = pregs;
+    iov.iov_len = sizeof(x64_xstatereg);
+    rc = ptrace(PTRACE_GETREGSET, pid, NT_X86_XSTATE, &iov);
 
     assert(rc == 0);
     return rc;
@@ -246,33 +283,32 @@ static inline int pt_call(pid_t pid, user_regs64_struct *oregs, uint64_t func, i
 #ifdef __aarch64__
     regs.regs[30] = 0;
 #else
-    regs.s_sp -= 8;
-    //uint64_t zero = 0;
-    rc = ptrace(PTRACE_POKEDATA, pid, regs.s_sp, 0);
+    regs.rsp -= 8;
+    rc = ptrace(PTRACE_POKEDATA, pid, regs.rsp, 0);
     assert(rc == 0);
 #endif
 
     // makeup function call and arguments
-    regs.s_pc = func;
+    regs.set_pc(func);
     for (int i=0; i<argc; i++) {
         switch (i) {
             case 0:
-                regs.s_ag0 = argv[0];
+                regs.set_arg0(argv[0]);
                 break;
             case 1:
-                regs.s_ag1 = argv[1];
+                regs.set_arg1(argv[1]);
                 break; 
             case 2:
-                regs.s_ag2 = argv[2];
+                regs.set_arg2(argv[2]);
                 break; 
             case 3:
-                regs.s_ag3 = argv[3];
+                regs.set_arg3(argv[3]);
                 break; 
             case 4:
-                regs.s_ag4 = argv[4];
+                regs.set_arg4(argv[4]);
                 break; 
             case 5:
-                regs.s_ag5 = argv[5];
+                regs.set_arg5(argv[5]);
                 break;
             default:
                assert(0); 
@@ -551,29 +587,52 @@ int Note::fill_file(const ProcessData& proc)
 // NT_PRSTATUS
 int Note::fill_prstatus(const ThreadData& thr)
 {
-    elf_prstatus64 *p = allocate<elf_prstatus64>();
-    p->pr_info.si_code = thr._siginfo.si_code;
-    p->pr_info.si_errno = thr._siginfo.si_errno;
-    p->pr_info.si_signo = thr._siginfo.si_signo;
-    p->pr_cursig = thr._siginfo.si_signo;
-    memcpy(&p->pr_reg, thr._regs, sizeof(p->pr_reg));
-    p->pr_pid = thr._d_stat->pid; 
-    p->pr_ppid = thr._d_stat->ppid; 
-    p->pr_pgrp = thr._d_stat->pgid; 
-    p->pr_sid = thr._d_stat->sid;
-    memcpy(&p->pr_utime, &thr._d_stat->utime, sizeof(p->pr_utime));
-    memcpy(&p->pr_stime, &thr._d_stat->stime, sizeof(p->pr_stime));
-    memcpy(&p->pr_cutime, &thr._d_stat->cutime, sizeof(p->pr_cutime));
-    memcpy(&p->pr_cstime, &thr._d_stat->cstime, sizeof(p->pr_cstime));
-    
+    if (thr._arch == ARCH_X64) {
+        x64_elf_prstatus *p = allocate<x64_elf_prstatus>();
+        p->pr_info.si_code = thr._siginfo.si_code;
+        p->pr_info.si_errno = thr._siginfo.si_errno;
+        p->pr_info.si_signo = thr._siginfo.si_signo;
+        p->pr_cursig = thr._siginfo.si_signo;
+        memcpy(&p->pr_reg, &thr._regs.x64, sizeof(thr._regs.x64));
+        p->pr_pid = thr._d_stat->pid; 
+        p->pr_ppid = thr._d_stat->ppid; 
+        p->pr_pgrp = thr._d_stat->pgid; 
+        p->pr_sid = thr._d_stat->sid;
+        memcpy(&p->pr_utime, &thr._d_stat->utime, sizeof(p->pr_utime));
+        memcpy(&p->pr_stime, &thr._d_stat->stime, sizeof(p->pr_stime));
+        memcpy(&p->pr_cutime, &thr._d_stat->cutime, sizeof(p->pr_cutime));
+        memcpy(&p->pr_cstime, &thr._d_stat->cstime, sizeof(p->pr_cstime));
+    }
+    else if (thr._arch == ARCH_AARCH64) {
+        arm64_elf_prstatus *p = allocate<arm64_elf_prstatus>();
+        p->pr_info.si_code = thr._siginfo.si_code;
+        p->pr_info.si_errno = thr._siginfo.si_errno;
+        p->pr_info.si_signo = thr._siginfo.si_signo;
+        p->pr_cursig = thr._siginfo.si_signo;
+        memcpy(&p->pr_reg, &thr._regs.arm64, sizeof(thr._regs.arm64));
+        p->pr_pid = thr._d_stat->pid; 
+        p->pr_ppid = thr._d_stat->ppid; 
+        p->pr_pgrp = thr._d_stat->pgid; 
+        p->pr_sid = thr._d_stat->sid;
+        memcpy(&p->pr_utime, &thr._d_stat->utime, sizeof(p->pr_utime));
+        memcpy(&p->pr_stime, &thr._d_stat->stime, sizeof(p->pr_stime));
+        memcpy(&p->pr_cutime, &thr._d_stat->cutime, sizeof(p->pr_cutime));
+        memcpy(&p->pr_cstime, &thr._d_stat->cstime, sizeof(p->pr_cstime));
+    }
     return 0;
 }
 
 // NT_FPREGSET
 int Note::fill_fpregset(const ThreadData& thr)
 {
-    elf_fpregset64_t *p = allocate<elf_fpregset64_t>();
-    memcpy(p, &thr._fpregs, sizeof(*p));
+    if (thr._arch == ARCH_X64) {
+        x64_elf_fpregset *p = allocate<x64_elf_fpregset>();
+        memcpy(p, &thr._fpregs.x64, sizeof(thr._fpregs.x64));
+    }
+    else if (thr._arch == ARCH_AARCH64) {
+        arm64_elf_fpregset *p = allocate<arm64_elf_fpregset>();
+        memcpy(p, &thr._fpregs.arm64, sizeof(thr._fpregs.arm64));
+    }
     return 0;
 }
 
@@ -585,24 +644,20 @@ int Note::fill_siginfo(const ThreadData& thr)
     return 0;
 }
 
-#ifdef __x86_64__
 // NT_X86_XSTATE
 int Note::fill_x86_xstate(const ThreadData& thr)
 {
     char *p = allocate(2688);
-    memcpy(p, &thr._xstatereg, 2688);
+    memcpy(p, &thr._xstate.x64, 2688);
     return 0;
 }
-#endif
 
-#ifdef __aarch64__
-// NT_SVE
+// NT_ARM_SVE
 int Note::fill_arm_sve(const ThreadData& thr)
 {
     // TBD: support arm sve registsers
     return -1; 
 }
-#endif
 
 Coredump::Coredump(pid_t pid) 
     : _pid(pid)
@@ -696,12 +751,7 @@ int Coredump::WriteThreadMeta(Lz4Stream& out, pid_t pid, bool is_main) {
     out.Write(buf, sizeof(i._regs));
 
     // get FP Registers 
-#ifdef __aarch64__
-    // TBD: ARM64 uses r14 for link register
-    //rc = ptrace(PTRACE_GETFPREGSET, pid, 0, buf);
-#else
-    rc = ptrace(PTRACE_GETFPREGS, pid, 0, buf);
-#endif
+    rc = pt_getfpregs(pid, (user_fpregs64_struct*)buf);
     assert(rc == 0);
     out.Write(buf, sizeof(i._fpregs));
 
@@ -710,13 +760,12 @@ int Coredump::WriteThreadMeta(Lz4Stream& out, pid_t pid, bool is_main) {
     assert(rc == 0);
     out.Write(buf, sizeof(i._siginfo));
 
-#ifdef __x86_64__
-    // get NT_X86_XSTATE     
-    struct iovec iovec = { buf, sizeof(i._xstatereg) };
-    rc = ptrace(PTRACE_GETREGSET, pid, NT_X86_XSTATE, &iovec);
-    assert(rc == 0); 
-    out.Write(buf, sizeof(i._xstatereg));
-#endif
+    if (_arch == ARCH_X64) {
+        // get NT_X86_XSTATE     
+        rc = pt_getxstateregs(pid, (x64_xstatereg*)&i._xstate);
+        assert(rc == 0);
+        out.Write(buf, sizeof(i._xstate.x64));
+    }
 
     out.Flush();
     // read /proc/<pid>/stat
@@ -736,11 +785,14 @@ int Coredump::VerifyFileHeader(Lz4Stream& in)
         return -1;
     }
 
-    rc = in.ReadRaw((char*)&hdr.version, sizeof(hdr.version));
-    if (rc != sizeof(hdr.version) || hdr.version != 1) {
-        error("we don't support the arthur version.");
+    rc = in.ReadRaw((char*)&hdr.m, sizeof(hdr.m));
+    if (rc != sizeof(hdr.m) || hdr.m.version > ACORE_VERSION) {
+        error("acore version %d > %d.", hdr.m.version, ACORE_VERSION);
         return -1;
     }
+
+    // for version 1, the arch is always x64.
+    _arch = hdr.m.arch;
 
     return 0;
 }
@@ -778,17 +830,22 @@ int Coredump::ReadMeta(Lz4Stream& in)
    
     for (int i=0; i<thread_num; i++) {
         ThreadData td;
+        td._arch = _arch; 
         
         buf = in.ReadBlock(hdr);
         
         buf->Read((char*)&td._pid, sizeof(td._pid));
-        buf->Read((char*)&td._regs, sizeof(td._regs));
-        buf->Read((char*)&td._fpregs, sizeof(td._fpregs));
-        buf->Read((char*)&td._siginfo, sizeof(td._siginfo));
 
-#ifdef __x86_64__
-        buf->Read((char*)&td._xstatereg, sizeof(td._xstatereg));
-#endif
+        if (_arch == ARCH_X64) {
+            buf->Read((char*)&td._regs, sizeof(td._regs.x64));
+            buf->Read((char*)&td._fpregs, sizeof(td._fpregs.x64));
+            buf->Read((char*)&td._siginfo, sizeof(td._siginfo));
+            buf->Read((char*)&td._xstate, sizeof(td._xstate.x64));
+        } else if (_arch == ARCH_AARCH64) {
+            buf->Read((char*)&td._regs, sizeof(td._regs.arm64));
+            buf->Read((char*)&td._fpregs, sizeof(td._fpregs.arm64));
+            buf->Read((char*)&td._siginfo, sizeof(td._siginfo));
+        }
 
         td._stat = in.GetFile();
         _process._threads.push_back(td);
@@ -893,6 +950,8 @@ int Coredump::WriteElfHeader(Lz4Stream& out)
 {
     Elf64_Ehdr ehdr;
     ehdr.e_phnum = _phdrs.size();
+
+    // hard coded the 'machine' by platform
 #ifdef __aarch64__
     ehdr.e_machine = EM_AARCH64; 
 #else
@@ -1039,17 +1098,17 @@ int Coredump::GenerateNotes()
         nt->fill_prstatus(i);
         _notes.push_back(nt);
 
-#ifdef __x86_64__
         // NT_FPREGSET (floating point registers)
         nt = new Note(NT_FPREGSET);
         nt->fill_fpregset(i);
         _notes.push_back(nt);
-        
-        // NT_X86_XSTATE (x86 XSAVE extended state)
-        nt = new Note(NT_X86_XSTATE);
-        nt->fill_x86_xstate(i);
-        _notes.push_back(nt);
-#endif
+
+        if (_arch == ARCH_X64) {        
+            // NT_X86_XSTATE (x86 XSAVE extended state)
+            nt = new Note(NT_X86_XSTATE);
+            nt->fill_x86_xstate(i);
+            _notes.push_back(nt);
+        }
 
         // NT_SIGINFO (siginfo_t data)
         nt = new Note(NT_SIGINFO);
@@ -1222,8 +1281,8 @@ int Coredump::forkcore(const char *corefile, bool sys_core)
         //uint64_t gv[6] = {0, 0x1000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_PRIVATE, 0, 0};
         uint64_t gv[6] = {0, 0x1000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_PRIVATE, 0, 0};
         pt_call(_pid, &regs, r_mmap, 6, gv);
-        info("mmap = %lx", regs.s_rc);
-        inject_page = regs.s_rc;
+        info("mmap = %lx", regs.get_rc());
+        inject_page = regs.get_rc();
     }
     pt_getregs(_pid, &regs);
 
@@ -1242,15 +1301,15 @@ int Coredump::forkcore(const char *corefile, bool sys_core)
      
         pt_write(_pid, inject_page, (void *)inject_fork, inject_size);
         pt_call(_pid, &regs, inject_page, 0, NULL);
-        info("child_pid = %d", (int)regs.s_rc);
-        _core_pid = regs.s_rc;
+        info("child_pid = %d", (int)regs.get_rc());
+        _core_pid = regs.get_rc();
     }
 
     // munmap injected page.
     {
         uint64_t gv[2] = {inject_page, 0x1000};
         pt_call(_pid, &regs, r_munmap, 2, gv);
-        info("munmap = %d", (int)regs.s_rc);
+        info("munmap = %d", (int)regs.get_rc());
     }
 
     // restore program 
@@ -1280,7 +1339,7 @@ int Coredump::forkcore(const char *corefile, bool sys_core)
     {
         uint64_t gv[3] = { (uint64_t)_core_pid, (uint64_t)NULL, 0 };
         pt_call(_pid, &regs, r_waitpid, 3, gv);
-        info("waitpid = %d", (int)regs.s_rc);
+        info("waitpid = %d", (int)regs.get_rc());
     }
     pt_setregs(_pid, &saved_regs);
     pt_detach(_pid);
@@ -1377,8 +1436,8 @@ int Coredump::forkcore_m(const char *corefile, bool sys_core)
     {
         uint64_t gv[6] = {0, 0x1000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_PRIVATE, 0, 0};
         pt_call(_pid, &regs, r_mmap, 6, gv);
-        info("mmap = %lx", regs.s_rc);
-        inject_page = regs.s_rc;
+        info("mmap = %lx", regs.get_rc());
+        inject_page = regs.get_rc();
     }
     pt_getregs(_pid, &regs);
 
@@ -1397,15 +1456,15 @@ int Coredump::forkcore_m(const char *corefile, bool sys_core)
      
         pt_write(_pid, inject_page, (void *)inject_fork, inject_size);
         pt_call(_pid, &regs, inject_page, 0, NULL);
-        info("child_pid = %d", (int)regs.s_rc);
-        _core_pid = regs.s_rc;
+        info("child_pid = %d", (int)regs.get_rc());
+        _core_pid = regs.get_rc();
     }
 
     // munmap injected page.
     {
         uint64_t gv[2] = {inject_page, 0x1000};
         pt_call(_pid, &regs, r_munmap, 2, gv);
-        info("munmap = %d", (int)regs.s_rc);
+        info("munmap = %d", (int)regs.get_rc());
     }
 
     // restore program regs
@@ -1465,7 +1524,7 @@ int Coredump::forkcore_m(const char *corefile, bool sys_core)
     {
         uint64_t gv[3] = {(uint64_t)_core_pid, (uint64_t)NULL, 0};
         pt_call(_pid, &regs, r_waitpid, 3, gv);
-        info("waitpid = %d", (int)regs.s_rc);
+        info("waitpid = %d", (int)regs.get_rc());
     }
     pt_setregs(_pid, &saved_regs);
     if(!WIFSTOPPED(s)) {
@@ -1616,10 +1675,16 @@ int Coredump::decompress(const char* in_file, const char* out_core)
     if (rc < 0) {
         return -1;
     }
-    VerifyFileHeader(in);
+    rc = VerifyFileHeader(in);
+    if (rc != 0) {
+        return rc;
+    }
 
     // load meta
-    ReadMeta(in);
+    rc = ReadMeta(in);
+    if (rc != 0) {
+        return rc;
+    }
     
     char fpath[PATH_MAX];
     if (!out_core) {
