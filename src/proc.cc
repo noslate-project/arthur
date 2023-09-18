@@ -1,6 +1,7 @@
 /* Support '/proc/xxx' pseudo-filesystem.
  */
 
+#include <unistd.h>
 #include <string> 
 #include <iostream> 
 #include <sstream> 

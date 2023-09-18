@@ -2,7 +2,7 @@
  * normally used to generate corefile, or inspect nodejs variables in live time.
  */
 
-#include <sys/ptrace.h>
+//#include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -139,7 +139,10 @@ int main(int argc, char *argv[])
             snprintf(fpath, sizeof(fpath), "acore.%u", cfg.pid);
             fout = fpath; 
         }
-
+#ifdef __APPLE__
+        printf("for MacOS only decompress was supported.\n");
+        exit(1);
+#else
         dump.takememspace();
         switch (cfg.mode) {
             case 0: 
@@ -154,6 +157,7 @@ int main(int argc, char *argv[])
                 help();
                 exit(1);
         }
+#endif
     }
 
     // decompress 
@@ -171,6 +175,7 @@ int main(int argc, char *argv[])
         return 2;
     }
 
+#if 0
     // test file compress
     if (cfg.mode == 1) {
         const char *file = argv[optind];
@@ -182,6 +187,7 @@ int main(int argc, char *argv[])
         const char *out_file = argv[optind+1];
         return dump.test_decompress(in_file, out_file);
     }
+#endif
 
     return 0;
 }

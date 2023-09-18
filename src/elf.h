@@ -5,9 +5,9 @@
 #ifndef _ARTHUR_ELF_H_
 #define _ARTHUR_ELF_H_
 
-#include <unistd.h>
+//#include <unistd.h>
 #include <stdint.h>
-#include <signal.h>
+//#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include "elf_defs.h"
@@ -402,8 +402,21 @@ struct elf_prpsinfo64
 
 static_assert(sizeof(elf_prpsinfo64)==0x88, "invalid prpsinfo");
 
-// siginfo_t
-static_assert(sizeof(siginfo_t)==0x80, "invalid prpsinfo");
+// Linux siginfo_t
+#ifdef __APPLE__
+struct lnx_siginfo_t {
+
+    int si_signo;		/* Signal number.  */
+    int si_code;
+    int si_errno;
+    int __pad0;			/* Explicit padding.  */
+    int pad[128/4-4];
+};
+#else
+typedef siginfo_t lnx_siginfo_t;
+#endif
+
+static_assert(sizeof(lnx_siginfo_t)==0x80, "invalid prpsinfo");
 
 #ifdef __aarch64__
 typedef arm64_user_regs64_struct    user_regs64_struct;

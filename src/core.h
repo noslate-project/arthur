@@ -113,7 +113,7 @@ struct ThreadData {
         x64_xstatereg               x64;           
     } _xstate; 
 
-    siginfo_t _siginfo;   // SigInfo 
+    lnx_siginfo_t _siginfo;   // SigInfo 
     
     ProcFile *_stat;
     ProcStat *_d_stat;

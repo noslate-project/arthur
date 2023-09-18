@@ -1,7 +1,10 @@
 /* Arthur coredump implementation.
  */
 
+#ifndef __APPLE__
 #include <sys/ptrace.h> // PTRACE_XXX
+#endif
+
 #include <sys/signal.h> // siginfo_t
 #include <sys/types.h>  // size_t, second_t ...
 #include <sys/wait.h>   // waitpid
@@ -22,7 +25,7 @@
 #include <iterator>
 
 #include "core.h"
-#include "proc.h"
+//#include "proc.h"
 
 // arthur only use a memory of BUFFER_SIZE on main stack.
 #define BUFFER_SIZE 1L*1024*1024         // general buffer size to store data
@@ -175,6 +178,8 @@ static uint64_t get_remote_func_address(pid_t pid,const char *so_path, const cha
     uint64_t r_addr = (l_addr - l_mod + r_mod);
     return r_addr;
 }
+
+#ifndef __APPLE__
 
 /* pt_ functions, for ptrace_ calls.
  */
@@ -411,6 +416,7 @@ static inline int pt_monitor(pid_t pid) {
     rc = pt_cont(pid);
     return rc;
 }
+#endif
 
 int makeroom(FILE* fout, size_t n)
 {
@@ -639,7 +645,7 @@ int Note::fill_fpregset(const ThreadData& thr)
 // NT_SIGINFO
 int Note::fill_siginfo(const ThreadData& thr)
 {
-    siginfo_t *p = allocate<siginfo_t>();
+    lnx_siginfo_t *p = allocate<lnx_siginfo_t>();
     memcpy(p, &thr._siginfo, sizeof(*p));
     return 0;
 }
@@ -730,6 +736,7 @@ int Coredump::WriteProcessMeta(Lz4Stream& out, ProcMaps& maps)
     return 0;
 }
 
+#ifndef __APPLE__
 int Coredump::WriteThreadMeta(Lz4Stream& out, pid_t pid, bool is_main) {
     info("thread: %d", pid); // thread info
     int rc;
@@ -774,6 +781,8 @@ int Coredump::WriteThreadMeta(Lz4Stream& out, pid_t pid, bool is_main) {
 
     return 0;
 }
+
+#endif
 
 int Coredump::VerifyFileHeader(Lz4Stream& in)
 {
@@ -1136,6 +1145,8 @@ int Coredump::takememspace()
     assert(buf[0] == 0);
     return 0;
 }
+
+#ifndef __APPLE__
 
 /* generate() is similar to gcore does.
  * 1) stop all threads.
@@ -1572,7 +1583,7 @@ int Coredump::monitor(const char* corefile)
 
     int exit_sig = 0;
     int signal_forkcore = 0; // signal generated due to free section in forkcore
-    siginfo_t sig_info;
+    lnx_siginfo_t sig_info;
     while(1) {
         if(signal_forkcore) {
             info("signal forkcore %d", signal_forkcore);
@@ -1667,6 +1678,8 @@ int Coredump::monitor(const char* corefile)
     return 0;
 }
 
+#endif 
+
 int Coredump::decompress(const char* in_file, const char* out_core)
 {
     int rc = 0;
@@ -1740,6 +1753,8 @@ int Coredump::decompress(const char* in_file, const char* out_core)
     info("saved corefile '%s'.", out_core);
     return 0;
 }
+
+#ifndef __APPLE__
 
 int Coredump::test_compress(const char* in_file, const char* out_file)
 {
@@ -1822,5 +1837,7 @@ int Coredump::test_decompress(const char* in_file, const char* out_file)
     info("write %lu bytes.", file_size);
     return 0;
 }
+
+#endif
 
 }; // arthur
