@@ -35,6 +35,7 @@ static_assert(BUFFER_SIZE >= 1*1024*1024, "buffer size should more than 1MB.");
 
 #define roundup(x,n) (((x)+((n)-1))&(~((n)-1)))
 
+#ifndef __APPLE__
 extern "C" {
 
 // the function is only for compile asm code.
@@ -88,6 +89,7 @@ static __used__ void inject_fork(void)
 }
 #endif
 }; // extern 'C'
+#endif
 
 namespace arthur {
 

@@ -2,7 +2,7 @@ CC := g++
 CCFLAGS += -std=c++11 -Wall -g -O0
 
 ARCH=$(shell uname -m)
-ifeq ($(ARCH), aarch64)
+ifeq ($(ARCH), arm64)
 	LIBRARY	= -llz4-arm64
 else
 	LIBRARY = -llz4-x64
